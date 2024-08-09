@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import locale
 import math
 import mimetypes
 import os
@@ -29,7 +30,7 @@ from aider.llm import litellm
 from aider.mdstream import MarkdownStream
 from aider.repo import GitRepo
 from aider.repomap import RepoMap
-from aider.sendchat import send_with_retries
+from aider.sendchat import retry_exceptions, send_completion
 from aider.utils import format_content, format_messages, is_image_file
 
 from ..dump import dump  # noqa: F401
@@ -51,7 +52,6 @@ class Coder:
     abs_fnames = None
     repo = None
     last_aider_commit_hash = None
-    aider_commit_hashes = set()
     aider_edited_files = None
     last_asked_for_commit_time = 0
     repo_map = None
@@ -70,7 +70,7 @@ class Coder:
     lint_outcome = None
     test_outcome = None
     multi_response_content = ""
-    rejected_urls = set()
+    partial_response_content = ""
 
     @classmethod
     def create(
@@ -157,9 +157,9 @@ class Coder:
             lines.append(f"Git repo: {rel_repo_dir} with {num_files:,} files")
             if num_files > 1000:
                 lines.append(
-                    "Warning: For large repos, consider using an .aiderignore file to ignore"
-                    " irrelevant files/dirs."
+                    "Warning: For large repos, consider using --subtree-only and .aiderignore"
                 )
+                lines.append(f"See: {urls.large_repos}")
         else:
             lines.append("Git repo: none")
 
@@ -218,6 +218,10 @@ class Coder:
         summarizer=None,
         total_cost=0.0,
     ):
+        self.aider_commit_hashes = set()
+        self.rejected_urls = set()
+        self.abs_root_path_cache = {}
+
         if not fnames:
             fnames = []
 
@@ -311,8 +315,17 @@ class Coder:
         if not self.repo:
             self.find_common_root()
 
+        if map_tokens is None:
+            use_repo_map = main_model.use_repo_map
+            map_tokens = 1024
+        else:
+            use_repo_map = map_tokens > 0
+
         max_inp_tokens = self.main_model.info.get("max_input_tokens") or 0
-        if main_model.use_repo_map and self.repo and self.gpt_prompts.repo_content_prefix:
+
+        has_map_prompt = hasattr(self, "gpt_prompts") and self.gpt_prompts.repo_content_prefix
+
+        if use_repo_map and self.repo and has_map_prompt:
             self.repo_map = RepoMap(
                 map_tokens,
                 self.root,
@@ -388,8 +401,14 @@ class Coder:
             return True
 
     def abs_root_path(self, path):
+        key = path
+        if key in self.abs_root_path_cache:
+            return self.abs_root_path_cache[key]
+
         res = Path(self.root) / path
-        return utils.safe_abs_path(res)
+        res = utils.safe_abs_path(res)
+        self.abs_root_path_cache[key] = res
+        return res
 
     fences = [
         ("``" + "`", "``" + "`"),
@@ -591,7 +610,7 @@ class Coder:
     def run_stream(self, user_message):
         self.io.user_input(user_message)
         self.init_before_message()
-        yield from self.send_new_user_message(user_message)
+        yield from self.send_message(user_message)
 
     def init_before_message(self):
         self.reflected_message = None
@@ -601,46 +620,30 @@ class Coder:
         self.edit_outcome = None
 
     def run(self, with_message=None):
-        while True:
-            self.init_before_message()
+        try:
+            if with_message:
+                self.io.user_input(with_message)
+                self.run_one(with_message)
+                return self.partial_response_content
 
-            try:
-                if with_message:
-                    new_user_message = with_message
-                    self.io.user_input(with_message)
-                else:
-                    new_user_message = self.run_loop()
+            while True:
+                try:
+                    user_message = self.get_input()
+                    self.run_one(user_message)
+                except KeyboardInterrupt:
+                    self.keyboard_interrupt()
+        except EOFError:
+            return
 
-                while new_user_message:
-                    self.reflected_message = None
-                    list(self.send_new_user_message(new_user_message))
-
-                    new_user_message = None
-                    if self.reflected_message:
-                        if self.num_reflections < self.max_reflections:
-                            self.num_reflections += 1
-                            new_user_message = self.reflected_message
-                        else:
-                            self.io.tool_error(
-                                f"Only {self.max_reflections} reflections allowed, stopping."
-                            )
-
-                if with_message:
-                    return self.partial_response_content
-
-            except KeyboardInterrupt:
-                self.keyboard_interrupt()
-            except EOFError:
-                return
-
-    def run_loop(self):
-        inp = self.io.get_input(
+    def get_input(self):
+        return self.io.get_input(
             self.root,
             self.get_inchat_relative_files(),
             self.get_addable_relative_files(),
             self.commands,
         )
 
+    def preproc_user_input(self, inp):
         if not inp:
             return
 
@@ -651,6 +654,25 @@ class Coder:
         self.check_for_urls(inp)
 
         return inp
+
+    def run_one(self, user_message):
+        self.init_before_message()
+
+        message = self.preproc_user_input(user_message)
+
+        while message:
+            self.reflected_message = None
+            list(self.send_message(message))
+
+            if not self.reflected_message:
+                break
+
+            if self.num_reflections >= self.max_reflections:
+                self.io.tool_error(f"Only {self.max_reflections} reflections allowed, stopping.")
+                return
+
+            self.num_reflections += 1
+            message = self.reflected_message
 
     def check_for_urls(self, inp):
         url_pattern = re.compile(r"(https?://[^\s/$.?#].[^\s]*[^\s,.])")
@@ -722,19 +744,41 @@ class Coder:
             ]
         self.cur_messages = []
 
+    def get_user_language(self):
+        try:
+            lang = locale.getlocale()[0]
+            if lang:
+                return lang  # Return the full language code, including country
+        except Exception:
+            pass
+
+        for env_var in ["LANG", "LANGUAGE", "LC_ALL", "LC_MESSAGES"]:
+            lang = os.environ.get(env_var)
+            if lang:
+                return lang.split(".")[
+                    0
+                ]  # Return language and country, but remove encoding if present
+
+        return None
+
     def fmt_system_prompt(self, prompt):
         lazy_prompt = self.gpt_prompts.lazy_prompt if self.main_model.lazy else ""
 
-        platform_text = f"- The user's system: {platform.platform()}\n"
+        platform_text = f"- Platform: {platform.platform()}\n"
         if os.name == "nt":
             var = "COMSPEC"
         else:
             var = "SHELL"
 
         val = os.getenv(var)
-        platform_text += f"- The user's shell: {var}={val}\n"
-        dt = datetime.now().isoformat()
-        platform_text += f"- The current date/time: {dt}"
+        platform_text += f"- Shell: {var}={val}\n"
+
+        user_lang = self.get_user_language()
+        if user_lang:
+            platform_text += f"- Language: {user_lang}\n"
+
+        dt = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")
+        platform_text += f"- Current date/time: {dt}"
 
         prompt = prompt.format(
             fence=self.fence,
@@ -812,7 +856,7 @@ class Coder:
 
         final = messages[-1]
 
-        max_input_tokens = self.main_model.info.get("max_input_tokens")
+        max_input_tokens = self.main_model.info.get("max_input_tokens") or 0
         # Add the reminder prompt if we still have room to include it.
         if (
             max_input_tokens is None
@@ -832,7 +876,7 @@ class Coder:
 
         return messages
 
-    def send_new_user_message(self, inp):
+    def send_message(self, inp):
         self.aider_edited_files = None
 
         self.cur_messages += [
@@ -851,6 +895,8 @@ class Coder:
         else:
             self.mdstream = None
 
+        retry_delay = 0.125
+
         self.usage_report = None
         exhausted = False
         interrupted = False
@@ -859,6 +905,14 @@ class Coder:
                 try:
                     yield from self.send(messages, functions=self.functions)
                     break
+                except retry_exceptions() as err:
+                    self.io.tool_error(str(err))
+                    retry_delay *= 2
+                    if retry_delay > 60:
+                        break
+                    self.io.tool_output(f"Retrying in {retry_delay:.1f} seconds...")
+                    time.sleep(retry_delay)
+                    continue
                 except KeyboardInterrupt:
                     interrupted = True
                     break
@@ -971,10 +1025,10 @@ class Coder:
         output_tokens = 0
         if self.partial_response_content:
             output_tokens = self.main_model.token_count(self.partial_response_content)
-        max_output_tokens = self.main_model.info.get("max_output_tokens", 0)
+        max_output_tokens = self.main_model.info.get("max_output_tokens") or 0
 
         input_tokens = self.main_model.token_count(self.format_messages())
-        max_input_tokens = self.main_model.info.get("max_input_tokens", 0)
+        max_input_tokens = self.main_model.info.get("max_input_tokens") or 0
 
         total_tokens = input_tokens + output_tokens
 
@@ -1121,7 +1175,7 @@ class Coder:
 
         interrupted = False
         try:
-            hash_object, completion = send_with_retries(
+            hash_object, completion = send_completion(
                 model.name,
                 messages,
                 functions,
@@ -1316,7 +1370,9 @@ class Coder:
         else:
             files = self.get_inchat_relative_files()
 
-        files = [fname for fname in files if self.is_file_safe(fname)]
+        # This is quite slow in large repos
+        # files = [fname for fname in files if self.is_file_safe(fname)]
+
         return sorted(set(files))
 
     def get_all_abs_files(self):

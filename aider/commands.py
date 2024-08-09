@@ -7,7 +7,8 @@ from collections import OrderedDict
 from pathlib import Path
 
 import git
-from PIL import ImageGrab
+import pyperclip
+from PIL import Image, ImageGrab
 
 from aider import models, prompts, voice
 from aider.help import Help, install_help_extra
@@ -328,7 +329,9 @@ class Commands:
                 tokens = self.coder.main_model.token_count(content)
             res.append((tokens, f"{relative_fname}", "use /drop to drop from chat"))
 
-        self.io.tool_output("Approximate context window usage, in tokens:")
+        self.io.tool_output(
+            f"Approximate context window usage for {self.coder.main_model.name}, in tokens:"
+        )
         self.io.tool_output()
 
         width = 8
@@ -344,7 +347,7 @@ class Commands:
         total_cost = 0.0
         for tk, msg, tip in res:
             total += tk
-            cost = tk * self.coder.main_model.info.get("input_cost_per_token", 0)
+            cost = tk * (self.coder.main_model.info.get("input_cost_per_token") or 0)
             total_cost += cost
             msg = msg.ljust(col_width)
             self.io.tool_output(f"${cost:7.4f} {fmt(tk)} {msg} {tip}")  # noqa: E231
@@ -352,7 +355,7 @@ class Commands:
         self.io.tool_output("=" * (width + cost_width + 1))
         self.io.tool_output(f"${total_cost:7.4f} {fmt(total)} tokens total")  # noqa: E231
 
-        limit = self.coder.main_model.info.get("max_input_tokens", 0)
+        limit = self.coder.main_model.info.get("max_input_tokens") or 0
         if not limit:
             return
 
@@ -678,7 +681,7 @@ class Commands:
             add = result.returncode != 0
         else:
             response = self.io.prompt_ask(
-                "Add the output to the chat? (y/n/instructions): ", default="y"
+                "Add the output to the chat?\n(y/n/instructions)", default=""
             ).strip()
 
             if response.lower() in ["yes", "y"]:
@@ -894,27 +897,52 @@ class Commands:
 
         return text
 
-    def cmd_add_clipboard_image(self, args):
-        "Add an image from the clipboard to the chat"
+    def cmd_clipboard(self, args):
+        "Add content from the clipboard to the chat (supports both text and images)"
         try:
+            # Check for image first
             image = ImageGrab.grabclipboard()
-            if image is None:
-                self.io.tool_error("No image found in clipboard.")
-                return
+            if isinstance(image, Image.Image):
+                basename = args.strip() if args.strip() else "clipboard_image"
+                temp_dir = tempfile.mkdtemp()
+                temp_file_path = os.path.join(temp_dir, f"{basename}.png")
+                image.save(temp_file_path, "PNG")
 
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
-                image.save(temp_file.name, "PNG")
-                temp_file_path = temp_file.name
+                abs_file_path = Path(temp_file_path).resolve()
 
-            abs_file_path = Path(temp_file_path).resolve()
-            self.coder.abs_fnames.add(str(abs_file_path))
-            self.io.tool_output(f"Added clipboard image to the chat: {abs_file_path}")
-            self.coder.check_added_files()
+                # Check if a file with the same name already exists in the chat
+                existing_file = next(
+                    (f for f in self.coder.abs_fnames if Path(f).name == abs_file_path.name), None
+                )
+                if existing_file:
+                    self.coder.abs_fnames.remove(existing_file)
+                    self.io.tool_output(f"Replaced existing image in the chat: {existing_file}")
 
-            return prompts.added_files.format(fnames=str(abs_file_path))
+                self.coder.abs_fnames.add(str(abs_file_path))
+                self.io.tool_output(f"Added clipboard image to the chat: {abs_file_path}")
+                self.coder.check_added_files()
+
+                return prompts.added_files.format(fnames=str(abs_file_path))
+
+            # If not an image, try to get text
+            text = pyperclip.paste()
+            if text:
+                self.io.tool_output(text)
+                return text
+
+            self.io.tool_error("No image or text content found in clipboard.")
+            return
 
         except Exception as e:
-            self.io.tool_error(f"Error adding clipboard image: {e}")
+            self.io.tool_error(f"Error processing clipboard content: {e}")
+
+    def cmd_map(self, args):
+        "Print out the current repository map"
+        repo_map = self.coder.get_repo_map()
+        if repo_map:
+            self.io.tool_output(repo_map)
+        else:
+            self.io.tool_output("No repository map available.")
 
 
 def expand_subdir(file_path):
