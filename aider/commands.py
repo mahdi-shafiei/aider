@@ -43,6 +43,8 @@ class Commands:
             verify_ssl=self.verify_ssl,
             args=self.args,
             parser=self.parser,
+            verbose=self.verbose,
+            editor=self.editor,
         )
 
     def __init__(
@@ -588,6 +590,10 @@ class Commands:
 
         self.io.tool_output(f"Diff since {commit_before_message[:7]}...")
 
+        if self.coder.pretty:
+            run_cmd(f"git diff {commit_before_message}")
+            return
+
         diff = self.coder.repo.diff_commits(
             self.coder.pretty,
             commit_before_message,
@@ -785,7 +791,8 @@ class Commands:
                     self.io.tool_error(f"Unable to read {matched_file}")
                 else:
                     self.coder.abs_fnames.add(abs_file_path)
-                    self.io.tool_output(f"Added {matched_file} to the chat")
+                    fname = self.coder.get_rel_fname(abs_file_path)
+                    self.io.tool_output(f"Added {fname} to the chat")
                     self.coder.check_added_files()
 
     def completions_drop(self):
@@ -808,15 +815,33 @@ class Commands:
             # Expand tilde in the path
             expanded_word = os.path.expanduser(word)
 
-            # Handle read-only files separately, without glob_filtered_to_repo
-            read_only_matched = [f for f in self.coder.abs_read_only_fnames if expanded_word in f]
+            # Handle read-only files with substring matching and samefile check
+            read_only_matched = []
+            for f in self.coder.abs_read_only_fnames:
+                if expanded_word in f:
+                    read_only_matched.append(f)
+                    continue
 
-            if read_only_matched:
-                for matched_file in read_only_matched:
-                    self.coder.abs_read_only_fnames.remove(matched_file)
-                    self.io.tool_output(f"Removed read-only file {matched_file} from the chat")
+                # Try samefile comparison for relative paths
+                try:
+                    abs_word = os.path.abspath(expanded_word)
+                    if os.path.samefile(abs_word, f):
+                        read_only_matched.append(f)
+                except (FileNotFoundError, OSError):
+                    continue
 
-            matched_files = self.glob_filtered_to_repo(expanded_word)
+            for matched_file in read_only_matched:
+                self.coder.abs_read_only_fnames.remove(matched_file)
+                self.io.tool_output(f"Removed read-only file {matched_file} from the chat")
+
+            # For editable files, use glob if word contains glob chars, otherwise use substring
+            if any(c in expanded_word for c in "*?[]"):
+                matched_files = self.glob_filtered_to_repo(expanded_word)
+            else:
+                # Use substring matching like we do for read-only files
+                matched_files = [
+                    self.coder.get_rel_fname(f) for f in self.coder.abs_fnames if expanded_word in f
+                ]
 
             if not matched_files:
                 matched_files.append(expanded_word)
@@ -876,7 +901,7 @@ class Commands:
     def cmd_run(self, args, add_on_nonzero_exit=False):
         "Run a shell command and optionally add the output to the chat (alias: !)"
         exit_status, combined_output = run_cmd(
-            args, verbose=self.verbose, error_print=self.io.tool_error
+            args, verbose=self.verbose, error_print=self.io.tool_error, cwd=self.coder.root
         )
 
         if combined_output is None:
@@ -902,13 +927,17 @@ class Commands:
                 dict(role="assistant", content="Ok."),
             ]
 
+            if add and exit_status != 0:
+                self.io.placeholder = "Fix that"
+
     def cmd_exit(self, args):
         "Exit the application"
+        self.coder.event("exit", reason="/exit")
         sys.exit()
 
     def cmd_quit(self, args):
         "Exit the application"
-        sys.exit()
+        self.cmd_exit(args)
 
     def cmd_ls(self, args):
         "List all known files and indicate which are included in the chat session"
@@ -1080,7 +1109,9 @@ class Commands:
                 self.io.tool_error("To use /voice you must provide an OpenAI API key.")
                 return
             try:
-                self.voice = voice.Voice(audio_format=self.args.voice_format)
+                self.voice = voice.Voice(
+                    audio_format=self.args.voice_format, device_name=self.args.voice_input_device
+                )
             except voice.SoundDeviceError:
                 self.io.tool_error(
                     "Unable to import `sounddevice` and/or `soundfile`, is portaudio installed?"
@@ -1367,6 +1398,41 @@ class Commands:
         user_input = pipe_editor(initial_content, suffix="md", editor=self.editor)
         if user_input.strip():
             self.io.set_placeholder(user_input.rstrip())
+
+    def cmd_copy_context(self, args=None):
+        """Copy the current chat context as markdown, suitable to paste into a web UI"""
+
+        chunks = self.coder.format_chat_chunks()
+
+        markdown = ""
+
+        # Only include specified chunks in order
+        for messages in [chunks.repo, chunks.readonly_files, chunks.chat_files]:
+            for msg in messages:
+                # Only include user messages
+                if msg["role"] != "user":
+                    continue
+
+                content = msg["content"]
+
+                # Handle image/multipart content
+                if isinstance(content, list):
+                    for part in content:
+                        if part.get("type") == "text":
+                            markdown += part["text"] + "\n\n"
+                else:
+                    markdown += content + "\n\n"
+
+        markdown += """
+Just tell me how to edit the files to make the changes.
+Don't give me back entire files.
+Just show me the edits I need to make.
+
+
+"""
+
+        pyperclip.copy(markdown)
+        self.io.tool_output("Copied code context to clipboard.")
 
 
 def expand_subdir(file_path):
