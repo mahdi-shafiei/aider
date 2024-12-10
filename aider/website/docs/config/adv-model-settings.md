@@ -46,13 +46,18 @@ The json file should be a dictionary with an entry for each model, as follows:
 }
 ```
 
-See 
-[litellm's model_prices_and_context_window.json file](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) for more examples.
-
 {: .tip }
 Use a fully qualified model name with a `provider/` at the front
 in the `.aider.model.metadata.json` file.
 For example, use `deepseek/deepseek-chat`, not just `deepseek-chat`.
+
+### Contribute model metadata
+
+Aider relies on
+[litellm's model_prices_and_context_window.json file](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) 
+for model metadata.
+
+Consider submitting a PR to that file to add missing models.
 
 ## Model settings
 
@@ -504,7 +509,7 @@ cog.out("```\n")
   examples_as_sys_msg: true
   extra_params:
     extra_headers:
-      anthropic-beta: prompt-caching-2024-07-31
+      anthropic-beta: prompt-caching-2024-07-31,pdfs-2024-09-25
     max_tokens: 8192
   lazy: false
   name: claude-3-5-sonnet-20240620
@@ -523,7 +528,7 @@ cog.out("```\n")
   examples_as_sys_msg: true
   extra_params:
     extra_headers:
-      anthropic-beta: prompt-caching-2024-07-31
+      anthropic-beta: prompt-caching-2024-07-31,pdfs-2024-09-25
     max_tokens: 8192
   lazy: false
   name: anthropic/claude-3-5-sonnet-20240620
@@ -542,7 +547,7 @@ cog.out("```\n")
   examples_as_sys_msg: true
   extra_params:
     extra_headers:
-      anthropic-beta: prompt-caching-2024-07-31
+      anthropic-beta: prompt-caching-2024-07-31,pdfs-2024-09-25
     max_tokens: 8192
   lazy: false
   name: anthropic/claude-3-5-sonnet-20241022
@@ -561,7 +566,7 @@ cog.out("```\n")
   examples_as_sys_msg: true
   extra_params:
     extra_headers:
-      anthropic-beta: prompt-caching-2024-07-31
+      anthropic-beta: prompt-caching-2024-07-31,pdfs-2024-09-25
     max_tokens: 8192
   lazy: false
   name: bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
@@ -580,7 +585,7 @@ cog.out("```\n")
   examples_as_sys_msg: true
   extra_params:
     extra_headers:
-      anthropic-beta: prompt-caching-2024-07-31
+      anthropic-beta: prompt-caching-2024-07-31,pdfs-2024-09-25
     max_tokens: 8192
   lazy: false
   name: anthropic/claude-3-5-sonnet-latest
@@ -599,7 +604,7 @@ cog.out("```\n")
   examples_as_sys_msg: true
   extra_params:
     extra_headers:
-      anthropic-beta: prompt-caching-2024-07-31
+      anthropic-beta: prompt-caching-2024-07-31,pdfs-2024-09-25
     max_tokens: 8192
   lazy: false
   name: claude-3-5-sonnet-20241022
@@ -618,7 +623,7 @@ cog.out("```\n")
   examples_as_sys_msg: true
   extra_params:
     extra_headers:
-      anthropic-beta: prompt-caching-2024-07-31
+      anthropic-beta: prompt-caching-2024-07-31,pdfs-2024-09-25
   lazy: false
   name: anthropic/claude-3-haiku-20240307
   reminder: user
@@ -636,7 +641,7 @@ cog.out("```\n")
   examples_as_sys_msg: false
   extra_params:
     extra_headers:
-      anthropic-beta: prompt-caching-2024-07-31
+      anthropic-beta: prompt-caching-2024-07-31,pdfs-2024-09-25
   lazy: false
   name: anthropic/claude-3-5-haiku-20241022
   reminder: user
@@ -654,7 +659,7 @@ cog.out("```\n")
   examples_as_sys_msg: false
   extra_params:
     extra_headers:
-      anthropic-beta: prompt-caching-2024-07-31
+      anthropic-beta: prompt-caching-2024-07-31,pdfs-2024-09-25
   lazy: false
   name: bedrock/anthropic.claude-3-5-haiku-20241022-v1:0
   reminder: user
@@ -672,7 +677,7 @@ cog.out("```\n")
   examples_as_sys_msg: true
   extra_params:
     extra_headers:
-      anthropic-beta: prompt-caching-2024-07-31
+      anthropic-beta: prompt-caching-2024-07-31,pdfs-2024-09-25
   lazy: false
   name: claude-3-5-haiku-20241022
   reminder: user
@@ -707,7 +712,7 @@ cog.out("```\n")
   examples_as_sys_msg: true
   extra_params:
     extra_headers:
-      anthropic-beta: prompt-caching-2024-07-31
+      anthropic-beta: prompt-caching-2024-07-31,pdfs-2024-09-25
   lazy: false
   name: claude-3-haiku-20240307
   reminder: user
@@ -970,6 +975,54 @@ cog.out("```\n")
   extra_params: null
   lazy: false
   name: gemini/gemini-1.5-pro-exp-0827
+  reminder: user
+  send_undo_reply: false
+  streaming: true
+  use_repo_map: true
+  use_system_prompt: true
+  use_temperature: true
+  weak_model_name: null
+- cache_control: false
+  caches_by_default: false
+  edit_format: diff
+  editor_edit_format: null
+  editor_model_name: null
+  examples_as_sys_msg: false
+  extra_params: null
+  lazy: false
+  name: gemini/gemini-exp-1206
+  reminder: user
+  send_undo_reply: false
+  streaming: true
+  use_repo_map: true
+  use_system_prompt: true
+  use_temperature: true
+  weak_model_name: null
+- cache_control: false
+  caches_by_default: false
+  edit_format: diff
+  editor_edit_format: null
+  editor_model_name: null
+  examples_as_sys_msg: false
+  extra_params: null
+  lazy: false
+  name: gemini/gemini-exp-1114
+  reminder: user
+  send_undo_reply: false
+  streaming: true
+  use_repo_map: true
+  use_system_prompt: true
+  use_temperature: true
+  weak_model_name: null
+- cache_control: false
+  caches_by_default: false
+  edit_format: diff
+  editor_edit_format: null
+  editor_model_name: null
+  examples_as_sys_msg: false
+  extra_params: null
+  lazy: false
+  name: gemini/gemini-exp-1121
   reminder: user
   send_undo_reply: false
   streaming: true
